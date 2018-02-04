@@ -2,8 +2,7 @@ Forked project from [here](https://github.com/cavariux/twitchirc) and modified b
 
 * Added method to add words for user messages into MySQL database and keeps count.
     * Requires [JDBC driver for MySQL](https://dev.mysql.com/downloads/connector/j/).
-    
-Looking to add statistics retrieval from database and eventually create word clouds from data.
+* Window pop ups where clicking inside will generate/refresh a word cloud.
 
 ***
 
