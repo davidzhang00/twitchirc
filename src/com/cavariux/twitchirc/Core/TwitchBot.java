@@ -2,19 +2,28 @@ package com.cavariux.twitchirc.Core;
 
 import com.cavariux.twitchirc.Chat.Channel;
 import com.cavariux.twitchirc.Chat.User;
+import com.kennycason.kumo.*;
+import com.kennycason.kumo.WordCloud;
+import com.kennycason.kumo.bg.CircleBackground;
+import com.kennycason.kumo.font.scale.SqrtFontScalar;
+import com.kennycason.kumo.palette.ColorPalette;
 
+import javax.swing.*;
+import java.awt.*;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.io.*;
 import java.net.Socket;
+import java.sql.*;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import java.sql.*;
 
 /**
  * The main object to start making your bot
  *
- * @author Leonardo Mariscal, Editted by David Zhang
+ * @author Leonardo Mariscal, Edited by David Zhang
  * @version 1.0-Beta
  */
 public class TwitchBot {
@@ -33,8 +42,11 @@ public class TwitchBot {
     private boolean stopped = true;
     private String commandTrigger = "!";
     private String clientID = "";
-
+    private String databaseLink = "jdbc:mysql://localhost:3306/twitchchat?useSSL=false";
+    private JFrame frame = new JFrame("Twitch Chat Word Cloud");
+    private ImageIcon wordCloudIcon = new ImageIcon();
     private static final Logger LOGGER = Logger.getLogger(TwitchBot.class.getName());
+    Connection conn;
 
     public final List<Channel> getChannels() {
         return Channel.getChannels();
@@ -53,6 +65,7 @@ public class TwitchBot {
 
     /**
      * The connect method allows you to connect to the IRC servers on twitch
+     * Added: Connects to MySQL database and builds word cloud from it.
      *
      * @param ip   The ip of the Chat group
      * @param port The port of the Chat group
@@ -95,10 +108,22 @@ public class TwitchBot {
         } catch (IOException e) {
             e.printStackTrace();
         }
+        try {
+            conn = DriverManager.getConnection(databaseLink, "root", "temppassword");
+        } catch (SQLException ex) {
+            ex.printStackTrace();
+        }
+        initWordCloudFrame();
     }
 
+    /**
+     * Called when a user subscribes to the channel. No need to implement.
+     *
+     * @param user
+     * @param channel
+     * @param message
+     */
     protected void onSub(User user, Channel channel, String message) {
-
     }
 
     /**
@@ -152,11 +177,11 @@ public class TwitchBot {
      * @param message The message
      */
     protected void onMessage(User user, Channel channel, String message) {
-
         String[] splitted = message.split("\\s+");
-
         updateDB(splitted);
-        /*  Disabled. Responds to user when they type in hello.
+
+        //  Disabled. Responds to user when they type in hello.
+        /*
 		if (message.equalsIgnoreCase("hello")) {
             if (channel.isMod(user))
                 this.sendMessage("Hi there Mod " + user, channel);
@@ -165,55 +190,99 @@ public class TwitchBot {
         */
     }
 
-
     /**
      * This method is called when a command is sent on the Twitch Chat.
      *
      * @param user    The user is sent, if you put it on a String it will give you the user's nick
      * @param channel The channel where the command was sent
-     * @param message The command
+     * @param command The command
      *
-     *                TODO: Implement database/word analysis
+     : TODO:    Implement database/word analysis
      */
     protected void onCommand(User user, Channel channel, String command) {
-
         if (command.equalsIgnoreCase("stats")) {
         }
     }
 
     /**
-     *  Added: Establishes connection to database and adds word to database. If word entry exists,
-     *  update the count. (Only accepting words 3 letters or more)
+     * Added: Establishes connection to database and adds word to database. If word entry exists,
+     * update the count. (Only accepting words more than 2 letters)
      *
-     *      TODO: Optimize connection & closing of it. Filter out common words such as "the" and "and" perhaps
+     * TODO:    Filter out common words such as "the" and "and" perhaps.
      *
-     *  @param message[] Array containing words extrapolated from message
+     * @param message Array containing words extrapolated from message
      */
 
     protected void updateDB(String message[]) {
-
-        Connection conn = null;
-        try {
-            conn = DriverManager.getConnection(
-                    "jdbc:mysql://localhost:3306/twitchchat?useSSL=false", "root", "temppassword");
-
-            for (String word : message) {
-                if (word.length() > 2) {
-                    PreparedStatement stmt = conn.prepareStatement("insert into twitchchatwordct " +
-                            "(word ,count) values (?,1) ON DUPLICATE KEY UPDATE count = count + 1;");
+        for (String word : message) {
+            if (word.length() > 2) {
+                try {
+                    PreparedStatement stmt = conn.prepareStatement("INSERT INTO twitchchatwordct " +
+                            "(word ,count) VALUES (?,1) ON DUPLICATE KEY UPDATE count = count + 1;");
                     stmt.setString(1, word);
                     stmt.execute();
+                } catch (SQLException ex) {
+                    ex.printStackTrace();
                 }
             }
-            conn.close();
-        } catch (SQLException ex) {
-            ex.printStackTrace();
         }
+    }
+
+    /**
+     * Added: Creates a 600x600 window. Upon clicking inside window, displays an updated word cloud.
+     */
+    protected void initWordCloudFrame() {
+        JLabel cloudLabel = new JLabel(wordCloudIcon);
+        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        frame.setSize(new Dimension(600, 600));
+        frame.getContentPane().add(cloudLabel);
+        frame.setVisible(true);
+        cloudLabel.addMouseListener(new MouseAdapter() {
+                                        public void mouseClicked(MouseEvent e) {
+                                            super.mouseClicked(e);
+                                            try {
+                                                buildWordCloud();
+                                                frame.repaint();
+                                            } catch (SQLException ex) {
+                                                ex.printStackTrace();
+                                            }
+                                        }
+                                    }
+        );
+    }
+
+    /**
+     * Added: Uses Kumo API to generate word cloud.
+     *
+     * @throws SQLException
+     */
+    protected void buildWordCloud() throws SQLException {
+        String query = "SELECT * FROM twitchchatwordct WHERE count > 5;";
+        final List<WordFrequency> wordFrequencies = new ArrayList<WordFrequency>();
+        final Dimension dimension = new Dimension(600, 600);
+        final WordCloud wordCloud = new WordCloud(dimension, CollisionMode.PIXEL_PERFECT);
+        wordCloud.setPadding(2);
+        wordCloud.setBackground(new CircleBackground(300));
+        wordCloud.setColorPalette(new ColorPalette(new Color(0x4055F1), new Color(0x408DF1), new Color(0x40AAF1),
+                new Color(0x40C5F1), new Color(0x40D3F1), new Color(0xFFFFFF)));
+        wordCloud.setFontScalar(new SqrtFontScalar(10, 40));
+
+        PreparedStatement stmt = conn.prepareStatement(query);
+        ResultSet rs = stmt.executeQuery();
+
+        while (rs.next()) {
+            String word = rs.getString(1);
+            int frequency = rs.getInt(2);
+            wordFrequencies.add(new WordFrequency(word, frequency));
+        }
+
+        wordCloud.build(wordFrequencies);
+        wordCloudIcon.setImage(wordCloud.getBufferedImage());
     }
 
 
 //	/**
-//	 * This method is used if you want to send a command to the IRC server, not commontly used
+//	 * This method is used if you want to send a command to the IRC server, not commonly used
 //	 * @param message the command you will sent
 //	 */
 //	public void sendRawMessage(String message)
@@ -229,7 +298,6 @@ public class TwitchBot {
 
     /**
      * An int variation of the sendRawMessage(String)
-     * <p>
      * message had to be appended with .toString()
      *
      * @param message the command you will sent
@@ -304,7 +372,7 @@ public class TwitchBot {
     }
 
     /**
-     * Experimetal, see if we can change the nick of the bot.
+     * Experimental, see if we can change the nick of the bot.
      *
      * @param newNick
      */
